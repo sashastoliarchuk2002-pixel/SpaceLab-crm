@@ -540,26 +540,39 @@ export default function App() {
       {fontImport}
 
       {/* Header */}
-      <div style={{ backgroundColor: COLORS.ink, color: COLORS.paper, padding: "20px 20px 16px", position: "sticky", top: 0, zIndex: 5 }}>
-        <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ backgroundColor: COLORS.ink, color: COLORS.paper, padding: "14px 20px 16px", position: "sticky", top: 0, zIndex: 5 }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
           {tab === "detail" ? (
-            <button onClick={() => { setTab("pipeline"); setSelectedId(null); }} style={{ background: "none", border: "none", color: COLORS.paper, cursor: "pointer", display: "flex", padding: 4 }}>
-              <ArrowLeft size={22} />
-            </button>
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <button
+                  onClick={() => { setTab("pipeline"); setSelectedId(null); }}
+                  style={{
+                    background: "none", border: "none", color: COLORS.paper, cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 8px 4px", marginLeft: -4,
+                  }}
+                >
+                  <ArrowLeft size={20} />
+                  <div style={{ width: 28, height: 28, borderRadius: 7, overflow: "hidden", flexShrink: 0, backgroundColor: "#000" }}>
+                    <img src={LOGO_DATA_URI} alt="Space Lab" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </div>
+                  <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 17 }}>Space Lab</span>
+                </button>
+                {selectedDeal && <ConfirmDeleteButton onConfirm={() => removeDeal(selectedDeal.id)} size={17} dark />}
+              </div>
+              <div style={{ fontSize: 13, color: "#C9BFAE", padding: "2px 4px 0", fontWeight: 500 }}>
+                {selectedDeal?.client || "Замовлення"}
+              </div>
+            </>
           ) : (
-            <div style={{ width: 38, height: 38, borderRadius: 8, overflow: "hidden", flexShrink: 0, backgroundColor: "#000" }}>
-              <img src={LOGO_DATA_URI} alt="Space Lab" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            </div>
-          )}
-          <div>
-            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 19, letterSpacing: "-0.01em" }}>
-              {tab === "detail" ? (selectedDeal?.client || "Замовлення") : "Space Lab"}
-            </div>
-            {tab !== "detail" && <div style={{ fontSize: 11.5, color: "#C9BFAE", marginTop: 1 }}>CRM майстерні · ліди · робочий час · реклама · фідбек</div>}
-          </div>
-          {tab === "detail" && selectedDeal && (
-            <div style={{ marginLeft: "auto" }}>
-              <ConfirmDeleteButton onConfirm={() => removeDeal(selectedDeal.id)} size={17} dark />
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 8, overflow: "hidden", flexShrink: 0, backgroundColor: "#000" }}>
+                <img src={LOGO_DATA_URI} alt="Space Lab" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              </div>
+              <div>
+                <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 19, letterSpacing: "-0.01em" }}>Space Lab</div>
+                <div style={{ fontSize: 11.5, color: "#C9BFAE", marginTop: 1 }}>CRM майстерні · ліди · робочий час · реклама · фідбек</div>
+              </div>
             </div>
           )}
         </div>
@@ -881,6 +894,7 @@ function Pipeline({ deals, campaigns, showAdd, setShowAdd, newDeal, setNewDeal, 
 
   const sorted = [...deals].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const clientNames = [...new Set(deals.map((d) => d.client).filter(Boolean))];
+  const contactValues = [...new Set(deals.map((d) => d.contact).filter(Boolean))];
   const projectNames = [...new Set(deals.map((d) => d.project).filter(Boolean))];
 
   const filtered = sorted.filter((d) => {
@@ -935,9 +949,37 @@ function Pipeline({ deals, campaigns, showAdd, setShowAdd, newDeal, setNewDeal, 
       {showAdd && (
         <form onSubmit={submitNewDeal} style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 18, display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Field label="Клієнт"><input style={inputStyle} value={newDeal.client} onChange={(e) => setNewDeal({ ...newDeal, client: e.target.value })} placeholder="Ім'я" /></Field>
-            <Field label="Контакт"><input style={inputStyle} value={newDeal.contact} onChange={(e) => setNewDeal({ ...newDeal, contact: e.target.value })} placeholder="Телефон / Telegram" /></Field>
+            <Field label="Клієнт">
+              <input
+                style={inputStyle} list="client-names-datalist"
+                value={newDeal.client}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  const match = deals.find((d) => d.client && d.client.toLowerCase() === name.toLowerCase());
+                  setNewDeal({
+                    ...newDeal, client: name,
+                    contact: (!newDeal.contact && match) ? match.contact : newDeal.contact,
+                    project: (!newDeal.project && match) ? match.project : newDeal.project,
+                  });
+                }}
+                placeholder="Ім'я — підкаже, якщо клієнт вже є в базі"
+              />
+              <datalist id="client-names-datalist">
+                {clientNames.map((n) => <option key={n} value={n} />)}
+              </datalist>
+            </Field>
+            <Field label="Контакт">
+              <input style={inputStyle} list="client-contacts-datalist" value={newDeal.contact} onChange={(e) => setNewDeal({ ...newDeal, contact: e.target.value })} placeholder="Телефон / Telegram" />
+              <datalist id="client-contacts-datalist">
+                {contactValues.map((c) => <option key={c} value={c} />)}
+              </datalist>
+            </Field>
           </div>
+          {newDeal.client && deals.some((d) => d.client && d.client.toLowerCase() === newDeal.client.toLowerCase()) && (
+            <div style={{ fontSize: 11.5, color: COLORS.sage, display: "flex", alignItems: "center", gap: 5, marginTop: -4 }}>
+              <CheckCircle2 size={12} /> Цей клієнт вже є в базі — контакт і проєкт підтягнуто автоматично
+            </div>
+          )}
           <Field label="Що хоче замовити">
             <textarea style={{ ...inputStyle, resize: "vertical" }} rows={2} value={newDeal.request} onChange={(e) => setNewDeal({ ...newDeal, request: e.target.value })} placeholder="Напр. кухня 4м з островом, дуб" />
           </Field>
@@ -1511,12 +1553,13 @@ function VoiceSurvey({ deal, onSave }) {
     const qa = SURVEY_QUESTIONS.map((q, i) => `${i + 1}. ${q}\nВідповідь: ${answers[i] || "(немає відповіді)"}`).join("\n\n");
     const prompt = `Ти аналізуєш відповіді клієнта меблевої майстерні після монтажу меблів. Ось питання і відповіді:\n\n${qa}\n\nПоверни ТІЛЬКИ JSON без жодних пояснень і без markdown-обгортки у форматі:\n{"summary": "коротке резюме 1-2 речення українською", "positives": ["коротка теза", "..."], "concerns": ["коротка теза", "..."], "estimatedRating": число від 1 до 5}`;
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/claude", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
       });
       const data = await response.json();
+      if (data.error) throw new Error(data.error.message || data.error || "Сервер відхилив запит");
       const raw = (data.content || []).map((b) => b.text || "").join("\n").replace(/```json|```/g, "").trim();
       let parsed;
       try { parsed = JSON.parse(raw); } catch { parsed = { summary: raw, positives: [], concerns: [], estimatedRating: null }; }
@@ -1526,7 +1569,7 @@ function VoiceSurvey({ deal, onSave }) {
       };
       onSave(survey);
     } catch (e) {
-      setApiError("Не вдалося проаналізувати відповіді. Перевірте зʼєднання і спробуйте ще раз.");
+      setApiError(`Не вдалося проаналізувати: ${e.message || "перевірте зʼєднання і спробуйте ще раз"}.`);
     } finally {
       setAnalyzing(false);
     }
@@ -1928,12 +1971,13 @@ function buildOrderContext(deal) {
 }
 
 async function callClaude(prompt) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 700, messages: [{ role: "user", content: prompt }] }),
   });
   const data = await response.json();
+  if (data.error) throw new Error(data.error.message || data.error || "Сервер відхилив запит");
   return (data.content || []).map((b) => b.text || "").join("\n").trim();
 }
 
@@ -1952,7 +1996,7 @@ function ContentTab({ deals, posts, onAdd, onTogglePosted, onDelete }) {
       const prompt = `Ти ведеш Instagram меблевої майстерні Space Lab (кухні, шафи, гардеробні на замовлення). Напиши теплий, живий допис для Instagram українською мовою на основі реального виконаного замовлення.\n\n${ctx}\n\nВимоги: 80-150 слів, простою мовою без канцеляризмів, від першої особи майстерні, можна згадати деталь з відгуку клієнта якщо вона позитивна, в кінці — м'який заклик до дії (написати в директ). Після тексту допису онови окремим рядком "Хештеги:" і додай 6-8 доречних хештегів через пробіл. Не додавай жодних пояснень, тільки готовий текст допису.`;
       const text = await callClaude(prompt);
       onAdd({ type: "order", dealId: deal.id, dealClient: deal.client, topic: deal.request, text });
-    } catch (e) { setErr("Не вдалося згенerувати — перевірте зʼєднання і спробуйте ще раз."); }
+    } catch (e) { setErr(`Не вдалося згенерувати: ${e.message || "перевірте зʼєднання і спробуйте ще раз"}.`); }
     setGenerating(false);
   };
 
@@ -1964,7 +2008,7 @@ function ContentTab({ deals, posts, onAdd, onTogglePosted, onDelete }) {
       const text = await callClaude(prompt);
       onAdd({ type: "topic", dealId: null, dealClient: null, topic: topic.trim(), text });
       setCustomTopic("");
-    } catch (e) { setErr("Не вдалося згенерувати — перевірте зʼєднання і спробуйте ще раз."); }
+    } catch (e) { setErr(`Не вдалося згенерувати: ${e.message || "перевірте зʼєднання і спробуйте ще раз"}.`); }
     setGenerating(false);
   };
 
