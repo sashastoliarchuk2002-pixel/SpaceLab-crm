@@ -41,6 +41,7 @@ const statusMeta = (v) => STATUS_OPTIONS.find((s) => s.v === v) || STATUS_OPTION
 
 const ITEM_CATEGORIES = [
   { v: "material", l: "Матеріал", color: "#3E5C76" },
+  { v: "edge", l: "Кромка", color: "#4A7C6F" },
   { v: "hardware", l: "Фурнітура", color: "#B5651D" },
   { v: "extra", l: "Додаткова опція", color: "#C7962C" },
   { v: "production", l: "Виготовлення", color: "#5F7A61" },
@@ -49,6 +50,13 @@ const ITEM_CATEGORIES = [
   { v: "other", l: "Інше", color: "#7A6C5D" },
 ];
 const categoryMeta = (v) => ITEM_CATEGORIES.find((c) => c.v === v) || ITEM_CATEGORIES.find((c) => c.v === "other");
+const CLIENT_VISIBLE_CATEGORIES = ["material", "edge", "hardware", "extra"];
+const HARDWARE_BRAND_PRESETS = [
+  "Blum (Австрія)", "Hafele (Німеччина)", "Hettich (Німеччина)", "GTV (Польща)", "Muller",
+];
+const MATERIAL_BRAND_PRESETS = [
+  "Egger (Австрія)", "Kronospan (Австрія)", "Swisspan (Україна)", "Saviola (Італія)",
+];
 
 const PHOTO_CATEGORIES = [
   { v: "design", l: "Конструювання" },
@@ -101,12 +109,12 @@ function emptyDeal() {
     deposit: "", depositDate: "", lastEditedBy: "", lastEditedAt: "",
   };
 }
-function emptyItem(category) { return { id: uid(), category: category || "material", name: "", price: "" }; }
+function emptyItem(category) { return { id: uid(), category: category || "material", name: "", qty: "", price: "" }; }
 // keeps older saved deals (before itemized costs / photos / voice survey existed) working without losing data
 function normalizeDeal(d) {
-  const items = Array.isArray(d.items) ? d.items : [];
+  const items = (Array.isArray(d.items) ? d.items : []).map((it) => ({ ...it, qty: it.qty || "" }));
   if (items.length === 0 && num(d.costs) > 0) {
-    items.push({ id: uid(), category: "other", name: "Витрати (перенесено)", price: d.costs });
+    items.push({ id: uid(), category: "other", name: "Витрати (перенесено)", qty: "", price: d.costs });
   }
   return {
     ...d, items, photos: Array.isArray(d.photos) ? d.photos : [], voiceSurvey: d.voiceSurvey || null,
@@ -213,6 +221,21 @@ export default function App() {
   const [error, setError] = useState("");
   const [tick, setTick] = useState(Date.now());
   const [loadError, setLoadError] = useState(false);
+  const touchStartRef = useRef(null);
+  const goBack = () => { setTab("pipeline"); setSelectedId(null); };
+  const handleTouchStart = (e) => {
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const handleTouchEnd = (e) => {
+    if (!touchStartRef.current || tab !== "detail") return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartRef.current.x;
+    const dy = Math.abs(t.clientY - touchStartRef.current.y);
+    // right-swipe starting near the left edge, mostly horizontal — like iOS "back"
+    if (touchStartRef.current.x < 60 && dx > 70 && dy < 60) goBack();
+    touchStartRef.current = null;
+  };
   const noteDraftsRef = useRef({});
   const [, forceNote] = useState(0);
 
@@ -499,6 +522,19 @@ export default function App() {
     };
   }, [deals]);
 
+  const itemNameSuggestions = useMemo(() => {
+    const lib = {};
+    ITEM_CATEGORIES.forEach((c) => { lib[c.v] = new Set(); });
+    HARDWARE_BRAND_PRESETS.forEach((b) => lib.hardware.add(b));
+    MATERIAL_BRAND_PRESETS.forEach((b) => lib.material.add(b));
+    deals.forEach((d) => (d.items || []).forEach((it) => {
+      if (it.name && it.name.trim() && lib[it.category]) lib[it.category].add(it.name.trim());
+    }));
+    const out = {};
+    Object.keys(lib).forEach((k) => { out[k] = [...lib[k]]; });
+    return out;
+  }, [deals]);
+
   const campaignStats = useMemo(() => campaigns.map((c) => {
     const linked = deals.filter((d) => d.campaignId === c.id);
     const won = linked.filter((d) => d.status === "done");
@@ -536,7 +572,7 @@ export default function App() {
   const selectedDeal = deals.find((d) => d.id === selectedId);
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: COLORS.paper, fontFamily: "'IBM Plex Sans', sans-serif", color: COLORS.ink, paddingBottom: 40 }}>
+    <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} style={{ minHeight: "100vh", backgroundColor: COLORS.paper, fontFamily: "'IBM Plex Sans', sans-serif", color: COLORS.ink, paddingBottom: tab === "detail" ? 90 : 40 }}>
       {fontImport}
 
       {/* Header */}
@@ -546,7 +582,7 @@ export default function App() {
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <button
-                  onClick={() => { setTab("pipeline"); setSelectedId(null); }}
+                  onClick={goBack}
                   style={{
                     background: "none", border: "none", color: COLORS.paper, cursor: "pointer",
                     display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 8px 4px", marginLeft: -4,
@@ -663,9 +699,29 @@ export default function App() {
             addNoteToStage={addNoteToStage} submitFeedback={submitFeedback}
             addItem={addItem} updateItem={updateItem} removeItem={removeItem}
             addPhoto={addPhoto} removePhoto={removePhoto} saveVoiceSurvey={saveVoiceSurvey}
+            itemNameSuggestions={itemNameSuggestions}
           />
         )}
       </div>
+
+      {tab === "detail" && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 10, padding: "10px 16px calc(10px + env(safe-area-inset-bottom))", backgroundColor: COLORS.paper, borderTop: `1px solid ${COLORS.line}` }}>
+          <button
+            onClick={goBack}
+            style={{
+              width: "100%", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+              backgroundColor: COLORS.ink, color: COLORS.paper, border: "none", borderRadius: 12, padding: "14px 0",
+              fontSize: 15, fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            <ArrowLeft size={19} />
+            <div style={{ width: 24, height: 24, borderRadius: 6, overflow: "hidden", flexShrink: 0, backgroundColor: "#000" }}>
+              <img src={LOGO_DATA_URI} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            </div>
+            <span style={{ fontFamily: "'Fraunces', serif" }}>Space Lab</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1122,7 +1178,7 @@ function ProjectGroup({ group, onOpen, onDelete, onDeleteProject }) {
 }
 
 // ==================== DEAL DETAIL ====================
-function DealDetail({ deal, campaigns, tick, updateDeal, startStage, stopStage, addNoteToStage, submitFeedback, addItem, updateItem, removeItem, addPhoto, removePhoto, saveVoiceSurvey }) {
+function DealDetail({ deal, campaigns, tick, updateDeal, startStage, stopStage, addNoteToStage, submitFeedback, addItem, updateItem, removeItem, addPhoto, removePhoto, saveVoiceSurvey, itemNameSuggestions }) {
   const [noteText, setNoteText] = useState({});
   const meta = statusMeta(deal.status);
 
@@ -1236,20 +1292,23 @@ function DealDetail({ deal, campaigns, tick, updateDeal, startStage, stopStage, 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
             {deal.items.map((it) => {
               const cm = categoryMeta(it.category);
+              const suggestions = (itemNameSuggestions && itemNameSuggestions[it.category]) || [];
               return (
-                <div key={it.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <div key={it.id} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <select
                     value={it.category}
                     onChange={(e) => updateItem(deal.id, it.id, { category: e.target.value })}
-                    style={{ ...inputStyle, width: 118, flexShrink: 0, fontSize: 11.5, padding: "8px 6px", color: cm.color, fontWeight: 600 }}
+                    style={{ ...inputStyle, width: 110, flexShrink: 0, fontSize: 11.5, padding: "8px 6px", color: cm.color, fontWeight: 600 }}
                   >
                     {ITEM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
                   </select>
                   <input
-                    style={{ ...inputStyle, flex: 1 }}
+                    style={{ ...inputStyle, flex: "1 1 140px" }}
+                    list={`item-names-${it.category}`}
                     placeholder={
                       it.category === "material" ? "Напр. ЛДСП Egger H1176 дуб сонома" :
-                      it.category === "hardware" ? "Напр. Петлі Blum, ручки Gtv" :
+                      it.category === "edge" ? "Напр. Кромка ПВХ 2мм, колір у тон" :
+                      it.category === "hardware" ? "Напр. Напрямні Hafele, завіси Hafele з доتягом" :
                       it.category === "extra" ? "Напр. Скляний фасад, LED-підсвітка" :
                       it.category === "production" ? "Напр. Робота — розкрій, кромкування, фрезерування" :
                       it.category === "assembly" ? "Напр. Збірка коробів, монтаж фурнітури" :
@@ -1257,6 +1316,14 @@ function DealDetail({ deal, campaigns, tick, updateDeal, startStage, stopStage, 
                     }
                     value={it.name}
                     onChange={(e) => updateItem(deal.id, it.id, { name: e.target.value })}
+                  />
+                  <datalist id={`item-names-${it.category}`}>
+                    {suggestions.map((n) => <option key={n} value={n} />)}
+                  </datalist>
+                  <input
+                    type="number" style={{ ...inputStyle, width: 64, flexShrink: 0 }} placeholder="к-сть"
+                    value={it.qty}
+                    onChange={(e) => updateItem(deal.id, it.id, { qty: e.target.value })}
                   />
                   <input
                     type="number" style={{ ...inputStyle, width: 90, flexShrink: 0 }} placeholder="грн"
@@ -1431,7 +1498,7 @@ function PhotoStrip({ photos, onAdd, onRemove, label, large }) {
           {uploading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={large ? 18 : 15} />}
           <span style={{ fontSize: 9 }}>{uploading ? "..." : label}</span>
         </button>
-        <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
+        <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
         {photos.map((p) => (
           <div key={p.id} style={{ position: "relative", flexShrink: 0 }}>
             <PhotoThumb id={p.id} size={large ? 84 : 56} onClick={() => setViewerId(p.id)} />
@@ -1750,6 +1817,8 @@ function ClientTracker({ deals, code }) {
           )}
         </div>
 
+        <ClientMaterialsCard deal={deal} />
+
         <div style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Прогрес виконання</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
@@ -1796,6 +1865,36 @@ function dealStageState(deal, key) {
   if (laterHasData) return "done";
   if (own.running || own.totalSeconds > 0) return "active";
   return "pending";
+}
+
+// client-safe materials summary — names only, no quantities, no prices
+function clientMaterialsSummary(deal) {
+  const names = (cat) => [...new Set((deal.items || []).filter((it) => it.category === cat && it.name && it.name.trim()).map((it) => it.name.trim()))];
+  const decor = [...names("material"), ...names("edge")];
+  const hardware = [...names("hardware"), ...names("extra")];
+  return { decor, hardware };
+}
+
+function ClientMaterialsCard({ deal }) {
+  const { decor, hardware } = clientMaterialsSummary(deal);
+  if (decor.length === 0 && hardware.length === 0) return null;
+  return (
+    <div style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Матеріали й фурнітура</div>
+      {decor.length > 0 && (
+        <div style={{ marginBottom: hardware.length > 0 ? 8 : 0 }}>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 2 }}>Декор</div>
+          <div style={{ fontSize: 13.5 }}>{decor.join(", ")}</div>
+        </div>
+      )}
+      {hardware.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 2 }}>Фурнітура</div>
+          <div style={{ fontSize: 13.5 }}>{hardware.join(", ")}</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ProjectTracker({ deals, code }) {
@@ -1859,6 +1958,16 @@ function ProjectTracker({ deals, code }) {
                 <span>{steps[0].label}</span>
                 <span>{steps[steps.length - 1].label}</span>
               </div>
+              {(() => {
+                const { decor, hardware } = clientMaterialsSummary(deal);
+                if (decor.length === 0 && hardware.length === 0) return null;
+                return (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}`, fontSize: 12.5 }}>
+                    {decor.length > 0 && <div style={{ marginBottom: hardware.length > 0 ? 4 : 0 }}><span style={{ color: COLORS.inkSoft }}>Декор: </span>{decor.join(", ")}</div>}
+                    {hardware.length > 0 && <div><span style={{ color: COLORS.inkSoft }}>Фурнітура: </span>{hardware.join(", ")}</div>}
+                  </div>
+                );
+              })()}
               {(() => {
                 const activeStep = steps.find((s) => s.stage && dealStageState(deal, s.stage) !== "pending");
                 const activePhotos = activeStep ? deal.photos.filter((p) => p.category === activeStep.stage) : [];
