@@ -57,6 +57,15 @@ const HARDWARE_BRAND_PRESETS = [
 const MATERIAL_BRAND_PRESETS = [
   "Egger (Австрія)", "Kronospan (Австрія)", "Swisspan (Україна)", "Saviola (Італія)",
 ];
+const HARDWARE_SUBTYPES = [
+  { v: "guides", l: "Напрямні" },
+  { v: "hinges", l: "Петлі" },
+  { v: "push", l: "Push-to-open" },
+  { v: "rod", l: "Штанга для одягу" },
+  { v: "handle", l: "Ручки" },
+  { v: "other", l: "Інше" },
+];
+const hardwareSubtypeLabel = (v) => (HARDWARE_SUBTYPES.find((s) => s.v === v) || {}).l || "";
 
 const PHOTO_CATEGORIES = [
   { v: "design", l: "Конструювання" },
@@ -109,12 +118,12 @@ function emptyDeal() {
     deposit: "", depositDate: "", lastEditedBy: "", lastEditedAt: "",
   };
 }
-function emptyItem(category) { return { id: uid(), category: category || "material", name: "", qty: "", price: "" }; }
+function emptyItem(category) { return { id: uid(), category: category || "material", name: "", qty: "", price: "", subtype: "" }; }
 // keeps older saved deals (before itemized costs / photos / voice survey existed) working without losing data
 function normalizeDeal(d) {
-  const items = (Array.isArray(d.items) ? d.items : []).map((it) => ({ ...it, qty: it.qty || "" }));
+  const items = (Array.isArray(d.items) ? d.items : []).map((it) => ({ ...it, qty: it.qty || "", subtype: it.subtype || "" }));
   if (items.length === 0 && num(d.costs) > 0) {
-    items.push({ id: uid(), category: "other", name: "Витрати (перенесено)", qty: "", price: d.costs });
+    items.push({ id: uid(), category: "other", name: "Витрати (перенесено)", qty: "", price: d.costs, subtype: "" });
   }
   return {
     ...d, items, photos: Array.isArray(d.photos) ? d.photos : [], voiceSurvey: d.voiceSurvey || null,
@@ -379,9 +388,19 @@ export default function App() {
     const entry = { id: uid(), ts: Date.now(), type: "note", seconds: null, note: note.trim() };
     updateStage(id, stageKey, { log: [entry, ...st.log] });
   };
-  const addItem = (dealId, category) => {
-    const d = deals.find((x) => x.id === dealId);
-    persistDeals(deals.map((x) => x.id === dealId ? { ...x, items: [...(x.items || []), emptyItem(category)] } : x));
+  const addItem = (dealId, category, afterItemId) => {
+    persistDeals(deals.map((x) => {
+      if (x.id !== dealId) return x;
+      const items = x.items || [];
+      const newItem = emptyItem(category);
+      if (afterItemId) {
+        const idx = items.findIndex((it) => it.id === afterItemId);
+        const next = [...items];
+        next.splice(idx + 1, 0, newItem);
+        return { ...x, items: next };
+      }
+      return { ...x, items: [...items, newItem] };
+    }));
   };
   const updateItem = (dealId, itemId, patch) => {
     persistDeals(deals.map((d) => d.id === dealId ? { ...d, items: d.items.map((it) => it.id === itemId ? { ...it, ...patch } : it) } : d));
@@ -554,6 +573,8 @@ export default function App() {
       input:focus, textarea:focus, select:focus { outline: 2px solid ${COLORS.stain}; outline-offset: 1px; }
       ::placeholder { color: #B5AA98; }
       button { font-family: inherit; }
+      input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      input[type="number"] { -moz-appearance: textfield; }
     `}</style>
   );
 
@@ -1294,50 +1315,88 @@ function DealDetail({ deal, campaigns, tick, updateDeal, startStage, stopStage, 
               const cm = categoryMeta(it.category);
               const suggestions = (itemNameSuggestions && itemNameSuggestions[it.category]) || [];
               return (
-                <div key={it.id} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <select
-                    value={it.category}
-                    onChange={(e) => updateItem(deal.id, it.id, { category: e.target.value })}
-                    style={{ ...inputStyle, width: 110, flexShrink: 0, fontSize: 11.5, padding: "8px 6px", color: cm.color, fontWeight: 600 }}
-                  >
-                    {ITEM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
-                  </select>
-                  <input
-                    style={{ ...inputStyle, flex: "1 1 140px" }}
-                    list={`item-names-${it.category}`}
-                    placeholder={
-                      it.category === "material" ? "Напр. ЛДСП Egger H1176 дуб сонома" :
-                      it.category === "edge" ? "Напр. Кромка ПВХ 2мм, колір у тон" :
-                      it.category === "hardware" ? "Напр. Напрямні Hafele, завіси Hafele з доتягом" :
-                      it.category === "extra" ? "Напр. Скляний фасад, LED-підсвітка" :
-                      it.category === "production" ? "Напр. Робота — розкрій, кромкування, фрезерування" :
-                      it.category === "assembly" ? "Напр. Збірка коробів, монтаж фурнітури" :
-                      it.category === "delivery" ? "Напр. Доставка по місту" : "Назва"
-                    }
-                    value={it.name}
-                    onChange={(e) => updateItem(deal.id, it.id, { name: e.target.value })}
-                  />
-                  <datalist id={`item-names-${it.category}`}>
-                    {suggestions.map((n) => <option key={n} value={n} />)}
-                  </datalist>
-                  <input
-                    type="number" style={{ ...inputStyle, width: 64, flexShrink: 0 }} placeholder="к-сть"
-                    value={it.qty}
-                    onChange={(e) => updateItem(deal.id, it.id, { qty: e.target.value })}
-                  />
-                  <input
-                    type="number" style={{ ...inputStyle, width: 90, flexShrink: 0 }} placeholder="грн"
-                    value={it.price}
-                    onChange={(e) => updateItem(deal.id, it.id, { price: e.target.value })}
-                  />
-                  <button onClick={() => removeItem(deal.id, it.id)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.brick, flexShrink: 0, padding: 4 }}>
-                    <Trash2 size={15} />
-                  </button>
+                <div key={it.id}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      value={it.category}
+                      onChange={(e) => updateItem(deal.id, it.id, { category: e.target.value, subtype: "" })}
+                      style={{ ...inputStyle, width: 110, flexShrink: 0, fontSize: 11.5, padding: "8px 6px", color: cm.color, fontWeight: 600 }}
+                    >
+                      {ITEM_CATEGORIES.map((c) => <option key={c.v} value={c.v}>{c.l}</option>)}
+                    </select>
+                    {it.category === "hardware" && (
+                      <select
+                        value={it.subtype}
+                        onChange={(e) => updateItem(deal.id, it.id, { subtype: e.target.value })}
+                        style={{ ...inputStyle, width: 116, flexShrink: 0, fontSize: 11.5, padding: "8px 6px" }}
+                      >
+                        <option value="">Тип...</option>
+                        {HARDWARE_SUBTYPES.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
+                      </select>
+                    )}
+                    <input
+                      style={{ ...inputStyle, flex: "1 1 140px" }}
+                      list={`item-names-${it.category}`}
+                      placeholder={
+                        it.category === "material" ? "Напр. ЛДСП Egger H1176 дуб сонома" :
+                        it.category === "edge" ? "Напр. Кромка ПВХ 2мм, колір у тон" :
+                        it.category === "hardware" ? "Напр. Blum, Hafele…" :
+                        it.category === "extra" ? "Напр. Скляний фасад, LED-підсвітка" :
+                        it.category === "production" ? "Напр. Робота — розкрій, кромкування, фрезерування" :
+                        it.category === "assembly" ? "Напр. Збірка коробів, монтаж фурнітури" :
+                        it.category === "delivery" ? "Напр. Доставка по місту" : "Назва"
+                      }
+                      value={it.name}
+                      onChange={(e) => updateItem(deal.id, it.id, { name: e.target.value })}
+                    />
+                    <datalist id={`item-names-${it.category}`}>
+                      {suggestions.map((n) => <option key={n} value={n} />)}
+                    </datalist>
+                    <input
+                      type="number" inputMode="decimal" style={{ ...inputStyle, width: 64, flexShrink: 0 }} placeholder="к-сть"
+                      value={it.qty}
+                      onChange={(e) => updateItem(deal.id, it.id, { qty: e.target.value })}
+                    />
+                    <input
+                      type="number" inputMode="decimal" style={{ ...inputStyle, width: 90, flexShrink: 0 }} placeholder="грн"
+                      value={it.price}
+                      onChange={(e) => updateItem(deal.id, it.id, { price: e.target.value })}
+                    />
+                    <button onClick={() => removeItem(deal.id, it.id)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.brick, flexShrink: 0, padding: 4 }}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  {it.category === "material" && (
+                    <button
+                      onClick={() => addItem(deal.id, "edge", it.id)}
+                      style={{ marginTop: 4, marginLeft: 116, fontSize: 11, padding: "4px 9px", borderRadius: 100, cursor: "pointer", border: `1px solid ${categoryMeta("edge").color}50`, backgroundColor: "transparent", color: categoryMeta("edge").color, display: "inline-flex", alignItems: "center", gap: 3 }}
+                    >
+                      <Plus size={10} /> Кромка до цього матеріалу
+                    </button>
+                  )}
                 </div>
               );
             })}
           </div>
         )}
+
+        {(deal.items || []).some((it) => it.category === "hardware" && it.name) && (
+          <button
+            onClick={async () => {
+              const lines = deal.items.filter((it) => it.category === "hardware" && it.name).map((it) => {
+                const type = it.subtype ? hardwareSubtypeLabel(it.subtype) + ": " : "";
+                const qty = it.qty ? ` — ${it.qty} шт.` : "";
+                return `${type}${it.name}${qty}`;
+              });
+              const text = `Фурнітура для замовлення — ${deal.client || ""} (${deal.request || ""})\n\n${lines.join("\n")}`;
+              try { await navigator.clipboard.writeText(text); } catch (e) {}
+            }}
+            style={{ ...btnSmall(COLORS.stainDark), marginBottom: 12 }}
+          >
+            <Send size={12} /> Копіювати список фурнітури для замовлення
+          </button>
+        )}
+
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
           {ITEM_CATEGORIES.map((c) => (
