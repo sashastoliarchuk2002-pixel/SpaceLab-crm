@@ -97,7 +97,7 @@ function emptyDeal() {
     project: "", createdAt: new Date().toISOString().slice(0, 10), dueDate: "", status: "lead",
     stages: { design: emptyStage(), production: emptyStage(), installation: emptyStage() },
     revenue: "", items: [], photos: [], feedback: null, voiceSurvey: null,
-    installedAt: "", warrantyDone: false, contentPosted: false, orderCode: genOrderCode(),
+    installedAt: "", warrantyDone: false, contentPosted: false, orderCode: genOrderCode(), projectCode: "",
     deposit: "", depositDate: "", lastEditedBy: "", lastEditedAt: "",
   };
 }
@@ -114,7 +114,7 @@ function normalizeDeal(d) {
     referralPayout: d.referralPayout || { amount: "", paid: false, paidAt: "" },
     referralInformed: d.referralInformed || false,
     installedAt: d.installedAt || "", warrantyDone: d.warrantyDone || false, contentPosted: d.contentPosted || false,
-    orderCode: d.orderCode || genOrderCode(),
+    orderCode: d.orderCode || genOrderCode(), projectCode: d.projectCode || "",
     deposit: d.deposit || "", depositDate: d.depositDate || "", lastEditedBy: d.lastEditedBy || "", lastEditedAt: d.lastEditedAt || "",
   };
 }
@@ -194,6 +194,9 @@ function CostRuler({ items }) {
 export default function App() {
   const [clientOrderCode] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("order"); } catch (e) { return null; }
+  });
+  const [clientProjectCode] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("project"); } catch (e) { return null; }
   });
   const [deals, setDeals] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
@@ -317,7 +320,20 @@ export default function App() {
     setUserName(name);
     window.storage.set(USERNAME_KEY, name, false).catch(() => {});
   };
-  const updateDeal = (id, patch) => persistDeals(deals.map((d) => (d.id === id ? { ...d, ...patch, lastEditedBy: userName || d.lastEditedBy, lastEditedAt: new Date().toISOString() } : d)));
+  const updateDeal = (id, patch) => {
+    let finalPatch = patch;
+    if (Object.prototype.hasOwnProperty.call(patch, "project")) {
+      const trimmed = (patch.project || "").trim();
+      if (trimmed) {
+        const sibling = deals.find((d) => d.id !== id && (d.project || "").trim().toLowerCase() === trimmed.toLowerCase() && d.projectCode);
+        const current = deals.find((d) => d.id === id);
+        finalPatch = { ...patch, projectCode: sibling ? sibling.projectCode : (current?.projectCode || genOrderCode()) };
+      } else {
+        finalPatch = { ...patch, projectCode: "" };
+      }
+    }
+    persistDeals(deals.map((d) => (d.id === id ? { ...d, ...finalPatch, lastEditedBy: userName || d.lastEditedBy, lastEditedAt: new Date().toISOString() } : d)));
+  };
   const updateStage = (id, stageKey, patch) =>
     persistDeals(deals.map((d) => d.id === id ? { ...d, stages: { ...d.stages, [stageKey]: { ...d.stages[stageKey], ...patch } }, lastEditedBy: userName || d.lastEditedBy, lastEditedAt: new Date().toISOString() } : d));
 
@@ -379,7 +395,10 @@ export default function App() {
     e.preventDefault();
     if (!newDeal.client.trim()) { setError("Вкажіть імʼя клієнта."); return; }
     setError("");
-    await persistDeals([{ ...newDeal, client: newDeal.client.trim(), request: newDeal.request.trim() }, ...deals]);
+    const trimmedProject = (newDeal.project || "").trim();
+    const sibling = trimmedProject ? deals.find((d) => (d.project || "").trim().toLowerCase() === trimmedProject.toLowerCase() && d.projectCode) : null;
+    const projectCode = trimmedProject ? (sibling ? sibling.projectCode : genOrderCode()) : "";
+    await persistDeals([{ ...newDeal, client: newDeal.client.trim(), request: newDeal.request.trim(), projectCode }, ...deals]);
     setNewDeal(emptyDeal());
     setShowAdd(false);
   };
@@ -506,7 +525,10 @@ export default function App() {
     return <div style={{ minHeight: "100vh", backgroundColor: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Sans', sans-serif", color: COLORS.inkSoft }}>{fontImport}Завантаження…</div>;
   }
 
-  // client-facing tracker: reached only via a link with ?order=CODE, shows nothing of the internal CRM
+  // client-facing trackers: reached only via a link with ?order=CODE or ?project=CODE, show nothing of the internal CRM
+  if (clientProjectCode) {
+    return <div>{fontImport}<ProjectTracker deals={deals} code={clientProjectCode} /></div>;
+  }
   if (clientOrderCode) {
     return <div>{fontImport}<ClientTracker deals={deals} code={clientOrderCode} /></div>;
   }
@@ -1489,7 +1511,7 @@ function VoiceSurvey({ deal, onSave }) {
     const qa = SURVEY_QUESTIONS.map((q, i) => `${i + 1}. ${q}\nВідповідь: ${answers[i] || "(немає відповіді)"}`).join("\n\n");
     const prompt = `Ти аналізуєш відповіді клієнта меблевої майстерні після монтажу меблів. Ось питання і відповіді:\n\n${qa}\n\nПоверни ТІЛЬКИ JSON без жодних пояснень і без markdown-обгортки у форматі:\n{"summary": "коротке резюме 1-2 речення українською", "positives": ["коротка теза", "..."], "concerns": ["коротка теза", "..."], "estimatedRating": число від 1 до 5}`;
     try {
-      const response = await fetch("/api/claude", {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
@@ -1662,15 +1684,7 @@ function ClientTracker({ deals, code }) {
     { key: "finished", label: "Готово", done: deal.status === "done" },
   ];
   const order = STAGE_KEYS;
-  const stageState = (key) => {
-    if (deal.status === "done") return "done";
-    const idx = order.indexOf(key);
-    const own = deal.stages[key];
-    const laterHasData = order.slice(idx + 1).some((k) => deal.stages[k].totalSeconds > 0 || deal.stages[k].running);
-    if (laterHasData) return "done";
-    if (own.running || own.totalSeconds > 0) return "active";
-    return "pending";
-  };
+  const stageState = (key) => dealStageState(deal, key);
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: COLORS.paper, fontFamily: "'IBM Plex Sans', sans-serif", color: COLORS.ink, paddingBottom: 40 }}>
@@ -1731,31 +1745,159 @@ function ClientTracker({ deals, code }) {
   );
 }
 
+function dealStageState(deal, key) {
+  if (deal.status === "done") return "done";
+  const idx = STAGE_KEYS.indexOf(key);
+  const own = deal.stages[key];
+  const laterHasData = STAGE_KEYS.slice(idx + 1).some((k) => deal.stages[k].totalSeconds > 0 || deal.stages[k].running);
+  if (laterHasData) return "done";
+  if (own.running || own.totalSeconds > 0) return "active";
+  return "pending";
+}
+
+function ProjectTracker({ deals, code }) {
+  const rooms = deals.filter((d) => d.projectCode && d.projectCode.toUpperCase() === (code || "").toUpperCase());
+
+  if (rooms.length === 0) {
+    return (
+      <div style={{ minHeight: "100vh", backgroundColor: COLORS.paper, fontFamily: "'IBM Plex Sans', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ textAlign: "center", maxWidth: 320 }}>
+          <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 19, marginBottom: 8 }}>Проєкт не знайдено</div>
+          <div style={{ fontSize: 13.5, color: COLORS.inkSoft }}>Перевірте посилання або зверніться до майстра — можливо, посилання застаріло.</div>
+        </div>
+      </div>
+    );
+  }
+
+  const projectName = rooms[0].project;
+  const doneCount = rooms.filter((r) => r.status === "done").length;
+
+  return (
+    <div style={{ minHeight: "100vh", backgroundColor: COLORS.paper, fontFamily: "'IBM Plex Sans', sans-serif", color: COLORS.ink, paddingBottom: 40 }}>
+      <div style={{ backgroundColor: COLORS.ink, padding: "22px 20px" }}>
+        <div style={{ maxWidth: 560, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 8, overflow: "hidden", flexShrink: 0, backgroundColor: "#000" }}>
+            <img src={LOGO_DATA_URI} alt="Space Lab" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          </div>
+          <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 18, color: COLORS.paper }}>Space Lab</div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 20px 0" }}>
+        <div style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>Ваш проєкт</div>
+          <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 20, marginBottom: 8 }}>{projectName}</div>
+          <div style={{ fontSize: 13, color: COLORS.inkSoft }}>{doneCount} з {rooms.length} {rooms.length === 1 ? "приміщення" : "приміщень"} завершено</div>
+        </div>
+
+        {rooms.map((deal) => {
+          const steps = [
+            { key: "accepted", label: "Прийнято", done: true },
+            { key: "design", label: "Конструювання", stage: "design" },
+            { key: "production", label: "Виготовлення", stage: "production" },
+            { key: "installation", label: "Монтаж", stage: "installation" },
+            { key: "finished", label: "Готово", done: deal.status === "done" },
+          ];
+          return (
+            <div key={deal.id} style={{ backgroundColor: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 12, padding: 18, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5 }}>{deal.request || "Приміщення"}</div>
+                {deal.status === "done" && <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 100, backgroundColor: "#E7EFE7", color: COLORS.sage, fontWeight: 600 }}>✓ Готово</span>}
+                {deal.status !== "done" && deal.dueDate && <DueBadge dueDate={deal.dueDate} />}
+              </div>
+              <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                {steps.map((s, i) => {
+                  const state = s.done !== undefined ? (s.done ? "done" : "pending") : dealStageState(deal, s.stage);
+                  const color = state === "done" ? COLORS.sage : state === "active" ? COLORS.blue : COLORS.line;
+                  return <div key={s.key} title={s.label} style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: color }} />;
+                })}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: COLORS.inkSoft }}>
+                <span>{steps[0].label}</span>
+                <span>{steps[steps.length - 1].label}</span>
+              </div>
+              {(() => {
+                const activeStep = steps.find((s) => s.stage && dealStageState(deal, s.stage) !== "pending");
+                const activePhotos = activeStep ? deal.photos.filter((p) => p.category === activeStep.stage) : [];
+                const finalPhotos = deal.status === "done" ? deal.photos.filter((p) => p.category === "final") : [];
+                const photosToShow = finalPhotos.length > 0 ? finalPhotos : activePhotos;
+                return photosToShow.length > 0 ? (
+                  <div style={{ marginTop: 12 }}>
+                    <ReadOnlyGallery photos={photosToShow} emptyText="" />
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          );
+        })}
+
+        <div style={{ textAlign: "center", fontSize: 12, color: COLORS.inkSoft, padding: "0 20px" }}>
+          Питання щодо проєкту? Напишіть нам у Telegram чи Instagram — ми на зв'язку.
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ClientLinkBox({ deal }) {
   const [copied, setCopied] = useState(false);
-  const link = (() => {
-    try { return `${window.location.origin}${window.location.pathname}?order=${deal.orderCode}`; }
-    catch (e) { return `?order=${deal.orderCode}`; }
+  const [copiedProject, setCopiedProject] = useState(false);
+  const base = (() => {
+    try { return `${window.location.origin}${window.location.pathname}`; }
+    catch (e) { return ""; }
   })();
+  const link = `${base}?order=${deal.orderCode}`;
+  const projectLink = `${base}?project=${deal.projectCode}`;
   const copy = async () => {
     try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); }
     catch (e) {}
   };
+  const copyProject = async () => {
+    try { await navigator.clipboard.writeText(projectLink); setCopiedProject(true); setTimeout(() => setCopiedProject(false), 2000); }
+    catch (e) {}
+  };
   return (
     <div style={{ marginTop: 10, backgroundColor: "#EEF3F6", borderRadius: 8, padding: 12 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.blue, marginBottom: 6 }}>🔗 Посилання для клієнта</div>
-      <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
-        Клієнт бачить тільки статус свого замовлення й фото — жодних цін чи інших клієнтів
-      </div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, backgroundColor: "#fff", padding: "5px 9px", borderRadius: 6, border: `1px solid ${COLORS.line}` }}>
-          {deal.orderCode}
-        </span>
-        <button onClick={copy} style={btnSmall(COLORS.blue)}>
-          {copied ? <CheckCircle2 size={12} /> : <Send size={12} />} {copied ? "Скопійовано" : "Копіювати посилання"}
-        </button>
-      </div>
+      {deal.projectCode ? (
+        <>
+          <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.blue, marginBottom: 6 }}>🔗 Посилання на весь проєкт "{deal.project}"</div>
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
+            Одне посилання показує прогрес по всіх кімнатах цього проєкту одразу — саме його й надсилайте клієнту
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, backgroundColor: "#fff", padding: "5px 9px", borderRadius: 6, border: `1px solid ${COLORS.line}` }}>
+              {deal.projectCode}
+            </span>
+            <button onClick={copyProject} style={btnSmall(COLORS.blue)}>
+              {copiedProject ? <CheckCircle2 size={12} /> : <Send size={12} />} {copiedProject ? "Скопійовано" : "Копіювати посилання на проєкт"}
+            </button>
+          </div>
+          <details>
+            <summary style={{ fontSize: 11, color: COLORS.inkSoft, cursor: "pointer" }}>Або посилання тільки на цю кімнату</summary>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, backgroundColor: "#fff", padding: "4px 8px", borderRadius: 6, border: `1px solid ${COLORS.line}` }}>{deal.orderCode}</span>
+              <button onClick={copy} style={{ ...btnSmall(COLORS.inkSoft), backgroundColor: "transparent", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
+                {copied ? <CheckCircle2 size={11} /> : <Send size={11} />} {copied ? "Скопійовано" : "Копіювати"}
+              </button>
+            </div>
+          </details>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.blue, marginBottom: 6 }}>🔗 Посилання для клієнта</div>
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
+            Клієнт бачить тільки статус свого замовлення й фото — жодних цін чи інших клієнтів
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, backgroundColor: "#fff", padding: "5px 9px", borderRadius: 6, border: `1px solid ${COLORS.line}` }}>
+              {deal.orderCode}
+            </span>
+            <button onClick={copy} style={btnSmall(COLORS.blue)}>
+              {copied ? <CheckCircle2 size={12} /> : <Send size={12} />} {copied ? "Скопійовано" : "Копіювати посилання"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1786,7 +1928,7 @@ function buildOrderContext(deal) {
 }
 
 async function callClaude(prompt) {
-  const response = await fetch("/api/claude", {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 700, messages: [{ role: "user", content: prompt }] }),
